@@ -65,8 +65,42 @@ void Registration::execute_icp_registration(double threshold, int max_iteration,
   //If mode=="svd" use get_svd_icp_transformation if mode=="lm" use get_lm_icp_transformation.
   //Remember to update transformation_ class variable, you can use source_for_icp_ to store transformed 3d points.
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    double previous_rmse = std::numeric_limits<double>::max();
+    int iteration = 0;
 
-  return;
+    while (iteration < max_iteration) {
+        // Find closest points
+        auto [source_indices, target_indices, rmse] = find_closest_point(threshold);
+
+        // Check for convergence based on RMSE change
+        if ((previous_rmse - rmse) < relative_rmse) {
+            std::cout << "Converged at iteration " << iteration << " with RMSE: " << rmse << std::endl;
+            break;
+        }
+
+        // Get the transformation matrix
+        if (mode == "svd") {
+            transformation_ = get_svd_icp_transformation(source_indices, target_indices);
+        } else if (mode == "lm") {
+            transformation_ = get_lm_icp_registration(source_indices, target_indices);
+        } else {
+            std::cerr << "Use'svd' or 'lm'." << std::endl;
+            return;
+        }
+
+        // Transform the source point cloud
+        source_for_icp_.Transform(transformation_);
+
+        // Update the RMSE
+        previous_rmse = rmse;
+
+        // Increment the iteration counter
+        iteration++;
+    }
+
+    // Final transformation
+    source_ = source_for_icp_;
+    std::cout << "Final transformation after " << iteration << " iterations: " << std::endl << transformation_ << std::endl;
 }
 
 
@@ -80,6 +114,35 @@ std::tuple<std::vector<size_t>, std::vector<size_t>, double> Registration::find_
   std::vector<size_t> source_indices;
   Eigen::Vector3d source_point;
   double rmse;
+
+  open3d::geometry::KDTreeFlann target_kd_tree(target_);
+  double total_squared_error = 0.0;
+  size_t num_valid_pairs = 0;
+
+  for (size_t i = 0; i < source_.points_.size(); ++i) {
+      const auto& source_point = source_.points_[i];
+     
+      std::vector<int> indices(1);
+      std::vector<double> distances(1);
+      
+      if (target_kd_tree.SearchKNN(source_point, 1, indices, distances) > 0) {
+          if (distances[0] <= threshold * threshold) {
+              source_indices.push_back(i);
+              target_indices.push_back(indices[0]);
+              total_squared_error += distances[0];
+              num_valid_pairs++;
+           }
+      }
+  }  
+
+
+
+  if (num_valid_pairs > 0) {
+    rmse = std::sqrt(total_squared_error / num_valid_pairs);
+  }else {
+    rmse = std::numeric_limits<double>::infinity();
+  }  
+s
   return {source_indices, target_indices, rmse};
 }
 

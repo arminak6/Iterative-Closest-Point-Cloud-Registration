@@ -65,8 +65,43 @@ void Registration::execute_icp_registration(double threshold, int max_iteration,
   //If mode=="svd" use get_svd_icp_transformation if mode=="lm" use get_lm_icp_transformation.
   //Remember to update transformation_ class variable, you can use source_for_icp_ to store transformed 3d points.
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    double previous_rmse = std::numeric_limits<double>::max();
+    int iteration = 0;
 
-  return;
+    while (iteration < max_iteration) {
+        // Find closest points
+        auto [source_indices, target_indices, rmse] = find_closest_point(threshold);
+
+        // Check for convergence based on RMSE change
+        if ((previous_rmse - rmse) < relative_rmse) {
+            std::cout << "Converged at iteration " << iteration << " with RMSE: " << rmse << std::endl;
+            break;
+        }
+
+        // Get the transformation matrix
+        if (mode == "svd") {
+            transformation_ = get_svd_icp_transformation(source_indices, target_indices);
+        } else if (mode == "lm") {
+            transformation_ = get_lm_icp_registration(source_indices, target_indices);
+        } else {
+            std::cerr << "Use'svd' or 'lm'." << std::endl;
+            return;
+        }
+
+        // Transform the source point cloud
+        source_for_icp_ = source_;
+        source_for_icp_.Transform(transformation_);
+
+        // Update the RMSE
+        previous_rmse = rmse;
+
+        // Increment the iteration counter
+        iteration++;
+    }
+
+    // Final transformation
+    source_ = source_for_icp_;
+    std::cout << "Final transformation after " << iteration << " iterations: " << std::endl << transformation_ << std::endl;
 }
 
 

@@ -142,7 +142,6 @@ std::tuple<std::vector<size_t>, std::vector<size_t>, double> Registration::find_
   }else {
     rmse = std::numeric_limits<double>::infinity();
   }  
-s
   return {source_indices, target_indices, rmse};
 }
 

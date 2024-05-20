@@ -89,7 +89,6 @@ void Registration::execute_icp_registration(double threshold, int max_iteration,
         }
 
         // Transform the source point cloud
-        source_for_icp_ = source_;
         source_for_icp_.Transform(transformation_);
 
         // Update the RMSE
@@ -115,6 +114,35 @@ std::tuple<std::vector<size_t>, std::vector<size_t>, double> Registration::find_
   std::vector<size_t> source_indices;
   Eigen::Vector3d source_point;
   double rmse;
+
+  open3d::geometry::KDTreeFlann target_kd_tree(target_);
+  double total_squared_error = 0.0;
+  size_t num_valid_pairs = 0;
+
+  for (size_t i = 0; i < source_.points_.size(); ++i) {
+      const auto& source_point = source_.points_[i];
+     
+      std::vector<int> indices(1);
+      std::vector<double> distances(1);
+      
+      if (target_kd_tree.SearchKNN(source_point, 1, indices, distances) > 0) {
+          if (distances[0] <= threshold * threshold) {
+              source_indices.push_back(i);
+              target_indices.push_back(indices[0]);
+              total_squared_error += distances[0];
+              num_valid_pairs++;
+           }
+      }
+  }  
+
+
+
+  if (num_valid_pairs > 0) {
+    rmse = std::sqrt(total_squared_error / num_valid_pairs);
+  }else {
+    rmse = std::numeric_limits<double>::infinity();
+  }  
+s
   return {source_indices, target_indices, rmse};
 }
 

@@ -256,13 +256,21 @@ Eigen::Matrix4d Registration::get_lm_icp_registration(std::vector<size_t> source
   options.minimizer_progress_to_stdout = false;
   options.num_threads = 4;
   options.max_num_iterations = 100;
+  ceres::Problem problem;
 
   std::vector<double> transformation_arr(6, 0.0);
   int num_points = source_indices.size();
   // For each point....
-  for( int i = 0; i < num_points; i++ )
+  for( size_t i = 0; i < source_indices.size(); i++ )
   {
-    
+    size_t source_idx = source_indices[i];
+    size_t target_idx = target_indices[i];
+
+    Eigen::Vector3d source_point = source_.points_[source_idx];
+    Eigen::Vector3d target_point = target_.points_[target_idx];
+
+    ceres::CostFunction *cost_function = PointDistance::Create(source_point, target_point);
+    problem.AddResidualBlock(cost_function, nullptr, transformation.data());
   }
 
   return transformation;

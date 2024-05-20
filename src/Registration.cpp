@@ -13,6 +13,36 @@ struct PointDistance
   // WARNING: When dealing with the AutoDiffCostFunction template parameters,
   // pay attention to the order of the template parameters
   ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+  
+  PointDistance(const Eigen::Vector3d& source_point, const Eigen::Vector3d& target_point)
+      : source_point_(source_point), target_point_(target_point) {}
+
+  template<typename T>
+  bool operator()(const T *const rotation, const T *const translation, T *residual) const {
+      // Rotate and translate the source point.
+      T transformed_x = rotation[0] * source_point_.x() + rotation[1] * source_point_.y() + rotation[2] * source_point_.z() + translation[0];
+      T transformed_y = rotation[3] * source_point_.x() + rotation[4] * source_point_.y() + rotation[5] * source_point_.z() + translation[1];
+      T transformed_z = rotation[6] * source_point_.x() + rotation[7] * source_point_.y() + rotation[8] * source_point_.z() + translation[2];
+
+      // The residual is the difference between the transformed source point and the target point.
+      residual[0] = transformed_x - target_point_.x();
+      residual[1] = transformed_y - target_point_.y();
+      residual[2] = transformed_z - target_point_.z();
+
+      return true;
+  }
+
+   
+
+    static ceres::CostFunction* Create(const Eigen::Vector3d& source_point, const Eigen::Vector3d& target_point) {
+      return new ceres::AutoDiffCostFunction<PointDistance, 3, 3, 3>(
+          new PointDistance(source_point, target_point)
+      );
+    }
+
+    Eigen::Vector3d source_point_;
+    Eigen::Vector3d target_point_;
 };
 
 
@@ -207,7 +237,7 @@ Eigen::Matrix4d Registration::get_svd_icp_transformation(std::vector<size_t> sou
   transformation.block<3, 3>(0, 0) = R;
   transformation.block<3, 1>(0, 3) = t;
 
-  
+
   return transformation;
 }
 

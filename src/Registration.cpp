@@ -142,7 +142,6 @@ std::tuple<std::vector<size_t>, std::vector<size_t>, double> Registration::find_
   }else {
     rmse = std::numeric_limits<double>::infinity();
   }  
-s
   return {source_indices, target_indices, rmse};
 }
 
@@ -153,7 +152,62 @@ Eigen::Matrix4d Registration::get_svd_icp_transformation(std::vector<size_t> sou
   //Use source_indices and target_indices to extract point to compute the 3x3 matrix to be decomposed.
   //Remember to manage the special reflection case.
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+  // Ensure the indices are valid and the same size
+  assert(source_indices.size() == target_indices.size());
+  size_t num_points = source_indices.size();
+
+  // Initialize centroids
+  Eigen::Vector3d centroid_source = Eigen::Vector3d::Zero();
+  Eigen::Vector3d centroid_target = Eigen::Vector3d::Zero();
+
+  for (size_t i = 0; i < num_points; ++i) {
+      centroid_source += source_.points_[source_indices[i]];
+      centroid_target += target_.points_[target_indices[i]];
+  }
+  centroid_source /= num_points;
+  centroid_target /= num_points;  
+
+
+  // Subtract centroids to get centered vectors
+  Eigen::MatrixXd centered_source(3, num_points);
+  Eigen::MatrixXd centered_target(3, num_points);
+  for (size_t i = 0; i < num_points; ++i) {
+      centered_source.col(i) = source_.points_[source_indices[i]] - centroid_source;
+      centered_target.col(i) = target_.points_[target_indices[i]] - centroid_target;
+  }
+
+
+  // Compute the covariance matrix
+  Eigen::Matrix3d covariance_matrix = centered_source * centered_target.transpose();
+
+
+  // Perform SVD
+  Eigen::JacobiSVD<Eigen::MatrixXd> svd(covariance_matrix, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  Eigen::Matrix3d U = svd.matrixU();
+  Eigen::Matrix3d V = svd.matrixV();
+
+  // Compute the rotation matrix
+  Eigen::Matrix3d R = V * U.transpose();
+
+
+  // Handle special reflection case
+  if (R.determinant() < 0) {
+      V.col(2) *= -1;
+      R = V * U.transpose();
+  }
+
+  // Compute the translation vector
+  Eigen::Vector3d t = centroid_target - R * centroid_source;
+
+
   Eigen::Matrix4d transformation = Eigen::Matrix4d::Identity(4,4);
+
+  transformation.block<3, 3>(0, 0) = R;
+  transformation.block<3, 1>(0, 3) = t;
+
+  
   return transformation;
 }
 

@@ -14,35 +14,44 @@ struct PointDistance
   // pay attention to the order of the template parameters
   ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-  
+  const Eigen::Vector3d source_point_;
+  const Eigen::Vector3d target_point_;
+
   PointDistance(const Eigen::Vector3d& source_point, const Eigen::Vector3d& target_point)
       : source_point_(source_point), target_point_(target_point) {}
 
   template<typename T>
-  bool operator()(const T *const rotation, const T *const translation, T *residual) const {
-      // Rotate and translate the source point.
-      T transformed_x = rotation[0] * source_point_.x() + rotation[1] * source_point_.y() + rotation[2] * source_point_.z() + translation[0];
-      T transformed_y = rotation[3] * source_point_.x() + rotation[4] * source_point_.y() + rotation[5] * source_point_.z() + translation[1];
-      T transformed_z = rotation[6] * source_point_.x() + rotation[7] * source_point_.y() + rotation[8] * source_point_.z() + translation[2];
+  bool operator()(const T* const rotation, const T* const translation, T* residual) const {
+    // Convert the rotation parameters to an Eigen type.
+    Eigen::Matrix<T, 3, 1> rotation_vector(rotation[0], rotation[1], rotation[2]);
 
-      // The residual is the difference between the transformed source point and the target point.
-      residual[0] = transformed_x - target_point_.x();
-      residual[1] = transformed_y - target_point_.y();
-      residual[2] = transformed_z - target_point_.z();
+    // Convert source and target points to Eigen types.
+    Eigen::Matrix<T, 3, 1> source_point_t = source_point_.template cast<T>();
+    Eigen::Matrix<T, 3, 1> target_point_t = target_point_.template cast<T>();
 
-      return true;
+    // Array to hold the transformed point.
+    T transformed_point[3];
+
+    // Use ceres provided AngleAxisRotatePoint to rotate the source point.
+    ceres::AngleAxisRotatePoint(rotation_vector.data(), source_point_t.data(), transformed_point);
+
+    // Apply the translation.
+    transformed_point[0] += translation[0];
+    transformed_point[1] += translation[1];
+    transformed_point[2] += translation[2];
+
+    // The residual is the difference between the transformed source point and the target point.
+    residual[0] = transformed_point[0] - target_point_t[0];
+    residual[1] = transformed_point[1] - target_point_t[1];
+    residual[2] = transformed_point[2] - target_point_t[2];
+
+    return true;
   }
 
-   
-
-    static ceres::CostFunction* Create(const Eigen::Vector3d& source_point, const Eigen::Vector3d& target_point) {
-      return new ceres::AutoDiffCostFunction<PointDistance, 3, 3, 3>(
-          new PointDistance(source_point, target_point)
-      );
-    }
-
-    Eigen::Vector3d source_point_;
-    Eigen::Vector3d target_point_;
+  static ceres::CostFunction* Create(const Eigen::Vector3d& source_point, const Eigen::Vector3d& target_point) {
+    return new ceres::AutoDiffCostFunction<PointDistance, 3, 3, 3>(
+        new PointDistance(source_point, target_point));
+  }
 };
 
 

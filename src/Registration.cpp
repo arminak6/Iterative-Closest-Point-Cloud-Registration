@@ -261,17 +261,42 @@ Eigen::Matrix4d Registration::get_lm_icp_registration(std::vector<size_t> source
   std::vector<double> transformation_arr(6, 0.0);
   int num_points = source_indices.size();
   // For each point....
-  for( size_t i = 0; i < source_indices.size(); i++ )
-  {
-    size_t source_idx = source_indices[i];
-    size_t target_idx = target_indices[i];
 
-    Eigen::Vector3d source_point = source_.points_[source_idx];
-    Eigen::Vector3d target_point = target_.points_[target_idx];
+    double rotation[3] = {0.0, 0.0, 0.0}; // Initialize rotation angles (rx, ry, rz)
+    double translation[3] = {0.0, 0.0, 0.0}; // Initialize translation (tx, ty, tz)
+    // Add residual blocks for each point pair
+    for (size_t i = 0; i < source_indices.size(); ++i)
+    {
+        // Extract corresponding source and target points
+        const Eigen::Vector3d& source_point = source_.points_[source_indices[i]];
+        const Eigen::Vector3d& target_point = target_.points_[target_indices[i]];
 
-    ceres::CostFunction *cost_function = PointDistance::Create(source_point, target_point);
-    problem.AddResidualBlock(cost_function, nullptr, transformation.data());
-  }
+        // Create a cost function for the current point pair
+        ceres::CostFunction* cost_function = PointDistance::Create(source_point, target_point);
+
+        // Add the cost function to the problem
+        problem.AddResidualBlock(cost_function, nullptr, rotation, translation);
+    }
+
+
+
+    // Add parameter blocks
+    problem.AddParameterBlock(rotation, 3);
+    problem.AddParameterBlock(translation, 3);
+
+
+    // Set the options and solve the problem
+    ceres::Solver::Summary summary;
+    ceres::Solve(options, &problem, &summary);
+
+
+    // Convert the optimized rotation (angle-axis) and translation to a transformation matrix
+    Eigen::Matrix3d rotation_matrix;
+    ceres::AngleAxisToRotationMatrix(rotation, rotation_matrix.data());
+
+    transformation.block<3,3>(0,0) = rotation_matrix;
+    transformation.block<3,1>(0,3) = Eigen::Map<Eigen::Vector3d>(translation);
+
 
   return transformation;
 }

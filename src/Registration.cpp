@@ -97,50 +97,53 @@ void Registration::draw_registration_result()
 
 
 void Registration::execute_icp_registration(double threshold, int max_iteration, double relative_rmse, std::string mode)
-{ 
+{
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  //ICP main loop
-  //Check convergence criteria and the current iteration.
-  //If mode=="svd" use get_svd_icp_transformation if mode=="lm" use get_lm_icp_transformation.
-  //Remember to update transformation_ class variable, you can use source_for_icp_ to store transformed 3d points.
+  // ICP main loop
+  // Check convergence criteria and the current iteration.
+  // If mode=="svd" use get_svd_icp_transformation if mode=="lm" use get_lm_icp_transformation.
+  // Remember to update transformation_ class variable, you can use source_for_icp_ to store transformed 3d points.
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    double previous_rmse = std::numeric_limits<double>::max();
-    int iteration = 0;
+  double previous_rmse = std::numeric_limits<double>::max();
 
-    while (iteration < max_iteration) {
-        // Find closest points
-        auto [source_indices, target_indices, rmse] = find_closest_point(threshold);
+  int iteration = 0;
+  while (iteration < max_iteration) 
+  {
 
-        // Check for convergence based on RMSE change
-        if ((previous_rmse - rmse) < relative_rmse) {
-            std::cout << "Converged at iteration " << iteration << " with RMSE: " << rmse << std::endl;
-            break;
-        }
+    // Find closest points
+    const auto closest_point = find_closest_point(threshold);
 
-        // Get the transformation matrix
-        if (mode == "svd") {
-            transformation_ = get_svd_icp_transformation(source_indices, target_indices);
-        } else if (mode == "lm") {
-            transformation_ = get_lm_icp_registration(source_indices, target_indices);
-        } else {
-            std::cerr << "Use'svd' or 'lm'." << std::endl;
-            return;
-        }
-
-        // Transform the source point cloud
-        source_for_icp_.Transform(transformation_);
-
-        // Update the RMSE
-        previous_rmse = rmse;
-
-        // Increment the iteration counter
-        iteration++;
+    // Check for convergence based on RMSE change
+    if ((previous_rmse - std::get<2>(closest_point)) < relative_rmse) {
+        std::cout << "Converged at iteration " << iteration << " with RMSE: " << std::get<2>(closest_point) << std::endl;
+        break;
     }
 
-    // Final transformation
-    source_ = source_for_icp_;
-    std::cout << "Final transformation after " << iteration << " iterations: " << std::endl << transformation_ << std::endl;
+
+    std::cout << iteration << " / " << max_iteration << std::endl;
+    source_for_icp_ = source_;
+    Eigen::Matrix4d transform;
+
+    if (mode == "svd"){
+      transform = get_svd_icp_transformation(std::get<0>(closest_point), std::get<1>(closest_point));
+    }else if (mode == "lm") {
+      transform = get_lm_icp_registration(std::get<0>(closest_point), std::get<1>(closest_point));
+    }
+    source_.Transform(transform);
+
+    double new_rmse = compute_rmse();
+    if (new_rmse < previous_rmse)
+    {
+      transformation_ = transform;
+    }
+
+
+    previous_rmse = std::get<2>(closest_point);
+    iteration++;
+  }
+  return;
 }
+
 
 
 std::tuple<std::vector<size_t>, std::vector<size_t>, double> Registration::find_closest_point(double threshold)
@@ -360,5 +363,3 @@ void Registration::save_merged_cloud(std::string filename)
   open3d::geometry::PointCloud merged = target_clone+source_clone;
   open3d::io::WritePointCloud(filename, merged );
 }
-
-

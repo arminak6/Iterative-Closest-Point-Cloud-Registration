@@ -120,7 +120,7 @@ void Registration::execute_icp_registration(double threshold, int max_iteration,
     }
 
 
-    std::cout << iteration << " / " << max_iteration << std::endl;
+    std::cout << "We are in iterarion: " <<iteration << " of " << max_iteration << std::endl;
     source_for_icp_ = source_;
     Eigen::Matrix4d transform;
 
@@ -128,12 +128,13 @@ void Registration::execute_icp_registration(double threshold, int max_iteration,
       transform = get_svd_icp_transformation(std::get<0>(closest_point), std::get<1>(closest_point));
     }else if (mode == "lm") {
       transform = get_lm_icp_registration(std::get<0>(closest_point), std::get<1>(closest_point));
+    }else{
+      std::cout<<"Plese enter svd OR lm as last arguman"<<std::endl;
     }
     source_.Transform(transform);
 
     double new_rmse = compute_rmse();
-    if (new_rmse < previous_rmse)
-    {
+    if (new_rmse < previous_rmse){
       transformation_ = transform;
     }
 
@@ -147,45 +148,53 @@ void Registration::execute_icp_registration(double threshold, int max_iteration,
 
 
 std::tuple<std::vector<size_t>, std::vector<size_t>, double> Registration::find_closest_point(double threshold)
-{ ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  //Find source and target indices: for each source point find the closest one in the target and discard if their 
-  //distance is bigger than threshold
+{
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  
+  // Find source and target indices: for each source point, find the closest one in the target and discard if their
+  // distance is bigger than the threshold
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+  // Vectors to store indices of matching points in source and target
   std::vector<size_t> target_indices;
   std::vector<size_t> source_indices;
-  Eigen::Vector3d source_point;
-  double rmse;
 
+  // Variable to hold the Root Mean Squared Error (RMSE)
+  double rmse = 0.0;
+
+  // Create a KDTree for the target point cloud to efficiently find the nearest neighbors
   open3d::geometry::KDTreeFlann target_kd_tree(target_);
+
+  // Variables to accumulate total squared error and count of valid pairs
   double total_squared_error = 0.0;
   size_t num_valid_pairs = 0;
 
+  // Iterate over each point in the source point cloud
   for (size_t i = 0; i < source_.points_.size(); ++i) {
-      const auto& source_point = source_.points_[i];
+      const Eigen::Vector3d& source_point = source_.points_[i];
      
       std::vector<int> indices(1);
-      std::vector<double> distances(1);
+      std::vector<double> squared_distances(1);
       
-      if (target_kd_tree.SearchKNN(source_point, 1, indices, distances) > 0) {
-          if (distances[0] <= threshold * threshold) {
+      if (target_kd_tree.SearchKNN(source_point, 1, indices, squared_distances) > 0) {
+          if (squared_distances[0] <= threshold * threshold) {
               source_indices.push_back(i);
               target_indices.push_back(indices[0]);
-              total_squared_error += distances[0];
+              total_squared_error += squared_distances[0];
               num_valid_pairs++;
            }
       }
   }  
 
-
-
+  // Calculate RMSE if there are valid pairs, otherwise set it to infinity
   if (num_valid_pairs > 0) {
     rmse = std::sqrt(total_squared_error / num_valid_pairs);
-  }else {
+  } else {
     rmse = std::numeric_limits<double>::infinity();
   }  
+
   return {source_indices, target_indices, rmse};
 }
+
 
 Eigen::Matrix4d Registration::get_svd_icp_transformation(std::vector<size_t> source_indices, std::vector<size_t> target_indices){
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////

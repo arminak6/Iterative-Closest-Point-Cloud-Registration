@@ -29,21 +29,20 @@ struct PointDistance
     Eigen::Matrix<T, 3, 1> source_point_t = source_point_.template cast<T>();
     Eigen::Matrix<T, 3, 1> target_point_t = target_point_.template cast<T>();
 
-    // Array to hold the transformed point.
     T transformed_point[3];
 
     // Use ceres provided AngleAxisRotatePoint to rotate the source point.
     ceres::AngleAxisRotatePoint(rotation_vector.data(), source_point_t.data(), transformed_point);
 
     // Apply the translation.
-    transformed_point[0] += translation[0];
-    transformed_point[1] += translation[1];
-    transformed_point[2] += translation[2];
+    for (int i = 0; i < 3; ++i) {
+      transformed_point[i] += translation[i];
+    }
 
-    // The residual is the difference between the transformed source point and the target point.
-    residual[0] = transformed_point[0] - target_point_t[0];
-    residual[1] = transformed_point[1] - target_point_t[1];
-    residual[2] = transformed_point[2] - target_point_t[2];
+    // Compute the residual as the difference between the transformed source point and the target point.
+    for (int i = 0; i < 3; ++i) {
+      residual[i] = transformed_point[i] - target_point_t[i];
+    }
 
     return true;
   }
@@ -104,7 +103,12 @@ void Registration::execute_icp_registration(double threshold, int max_iteration,
   // If mode=="svd" use get_svd_icp_transformation if mode=="lm" use get_lm_icp_transformation.
   // Remember to update transformation_ class variable, you can use source_for_icp_ to store transformed 3d points.
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  double previous_rmse = std::numeric_limits<double>::max();
+  double pre_rmse = std::numeric_limits<double>::max();
+
+
+  // Start timing
+  auto start_time = std::chrono::high_resolution_clock::now();
+
 
   int iteration = 0;
   while (iteration < max_iteration) 
@@ -114,8 +118,13 @@ void Registration::execute_icp_registration(double threshold, int max_iteration,
     const auto closest_point = find_closest_point(threshold);
 
     // Check for convergence based on RMSE change
-    if ((previous_rmse - std::get<2>(closest_point)) < relative_rmse) {
-        std::cout << "Converged at iteration " << iteration << " with RMSE: " << std::get<2>(closest_point) << std::endl;
+    if ((pre_rmse - std::get<2>(closest_point)) < relative_rmse) {
+        std::cout << "Converged at iteration " << iteration << std::endl;
+        // End timing
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+        std::cout << "Total time for ICP registration: " << duration/ 1000.0 << " Sec" << std::endl;
         break;
     }
 
@@ -126,20 +135,21 @@ void Registration::execute_icp_registration(double threshold, int max_iteration,
 
     if (mode == "svd"){
       transform = get_svd_icp_transformation(std::get<0>(closest_point), std::get<1>(closest_point));
+      source_.Transform(transform);
     }else if (mode == "lm") {
       transform = get_lm_icp_registration(std::get<0>(closest_point), std::get<1>(closest_point));
+      source_.Transform(transform);
     }else{
       std::cout<<"Plese enter svd OR lm as last arguman"<<std::endl;
     }
-    source_.Transform(transform);
 
     double new_rmse = compute_rmse();
-    if (new_rmse < previous_rmse){
+    if (new_rmse < pre_rmse){
       transformation_ = transform;
     }
 
 
-    previous_rmse = std::get<2>(closest_point);
+    pre_rmse = std::get<2>(closest_point);
     iteration++;
   }
   return;
@@ -155,8 +165,8 @@ std::tuple<std::vector<size_t>, std::vector<size_t>, double> Registration::find_
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
   // Vectors to store indices of matching points in source and target
-  std::vector<size_t> target_indices;
-  std::vector<size_t> source_indices;
+  std::vector<size_t> targetIndices;
+  std::vector<size_t> sourceIndices;
 
   // Variable to hold the Root Mean Squared Error (RMSE)
   double rmse = 0.0;
@@ -177,8 +187,8 @@ std::tuple<std::vector<size_t>, std::vector<size_t>, double> Registration::find_
       
       if (target_kd_tree.SearchKNN(source_point, 1, indices, squared_distances) > 0) {
           if (squared_distances[0] <= threshold * threshold) {
-              source_indices.push_back(i);
-              target_indices.push_back(indices[0]);
+              sourceIndices.push_back(i);
+              targetIndices.push_back(indices[0]);
               total_squared_error += squared_distances[0];
               num_valid_pairs++;
            }
@@ -192,42 +202,47 @@ std::tuple<std::vector<size_t>, std::vector<size_t>, double> Registration::find_
     rmse = std::numeric_limits<double>::infinity();
   }  
 
-  return {source_indices, target_indices, rmse};
+  return {sourceIndices, targetIndices, rmse};
 }
 
 
-Eigen::Matrix4d Registration::get_svd_icp_transformation(std::vector<size_t> source_indices, std::vector<size_t> target_indices){
+Eigen::Matrix4d Registration::get_svd_icp_transformation(std::vector<size_t> sourceIndices, std::vector<size_t> targetIndices)
+{
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  //Find point clouds centroids and subtract them. 
-  //Use SVD (Eigen::JacobiSVD<Eigen::MatrixXd>) to find best rotation and translation matrix.
-  //Use source_indices and target_indices to extract point to compute the 3x3 matrix to be decomposed.
-  //Remember to manage the special reflection case.
+  // Find point clouds centroids and subtract them. 
+  // Use SVD (Eigen::JacobiSVD<Eigen::MatrixXd>) to find best rotation and translation matrix.
+  // Use sourceIndices and targetIndices to extract point to compute the 3x3 matrix to be decomposed.
+  // Remember to manage the special reflection case.
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 
   // Ensure the indices are valid and the same size
-  assert(source_indices.size() == target_indices.size());
-  size_t num_points = source_indices.size();
+  assert(sourceIndices.size() == targetIndices.size());
+  size_t num_points = sourceIndices.size();
 
-  // Initialize centroids
-  Eigen::Vector3d centroid_source = Eigen::Vector3d::Zero();
-  Eigen::Vector3d centroid_target = Eigen::Vector3d::Zero();
+  // Convert the point clouds to Eigen matrices using the indices
+  Eigen::Matrix<double, 3, Eigen::Dynamic> sourcePoints(3, num_points);
+  Eigen::Matrix<double, 3, Eigen::Dynamic> targetPoints(3, num_points);
+
+  for (size_t i = 0; i < num_points; ++i) {
+    sourcePoints.col(i) = source_.points_[sourceIndices[i]];
+    targetPoints.col(i) = target_.points_[targetIndices[i]];
+  }
 
   // Compute centroids of source and target point clouds
+  Eigen::Vector3d source_centroid = Eigen::Vector3d::Zero();
+  Eigen::Vector3d target_centroid = Eigen::Vector3d::Zero();
+
   for (size_t i = 0; i < num_points; ++i) {
-    centroid_source += source_.points_[source_indices[i]];
-    centroid_target += target_.points_[target_indices[i]];
+    source_centroid += sourcePoints.col(i);
+    target_centroid += targetPoints.col(i);
   }
-  centroid_source /= num_points;
-  centroid_target /= num_points;
+
+  source_centroid /= static_cast<double>(num_points);
+  target_centroid /= static_cast<double>(num_points);
 
   // Subtract centroids to get centered vectors
-  Eigen::MatrixXd centered_source(3, num_points);
-  Eigen::MatrixXd centered_target(3, num_points);
-  for (size_t i = 0; i < num_points; ++i) {
-    centered_source.col(i) = source_.points_[source_indices[i]] - centroid_source;
-    centered_target.col(i) = target_.points_[target_indices[i]] - centroid_target;
-  }
+  Eigen::Matrix<double, 3, Eigen::Dynamic> centered_source = sourcePoints.colwise() - source_centroid;
+  Eigen::Matrix<double, 3, Eigen::Dynamic> centered_target = targetPoints.colwise() - target_centroid;
 
   // Compute the covariance matrix
   Eigen::Matrix3d covariance_matrix = centered_source * centered_target.transpose();
@@ -247,7 +262,7 @@ Eigen::Matrix4d Registration::get_svd_icp_transformation(std::vector<size_t> sou
   }
 
   // Compute the translation vector
-  Eigen::Vector3d t = centroid_target - R * centroid_source;
+  Eigen::Vector3d t = target_centroid - R * source_centroid;
 
   // Form the transformation matrix
   Eigen::Matrix4d transformation = Eigen::Matrix4d::Identity();
@@ -257,7 +272,10 @@ Eigen::Matrix4d Registration::get_svd_icp_transformation(std::vector<size_t> sou
   return transformation;
 }
 
-Eigen::Matrix4d Registration::get_lm_icp_registration(std::vector<size_t> source_indices, std::vector<size_t> target_indices)
+
+
+
+Eigen::Matrix4d Registration::get_lm_icp_registration(std::vector<size_t> sourceIndices, std::vector<size_t> targetIndices)
 {
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   //Use LM (Ceres) to find best rotation and translation matrix. 
@@ -265,7 +283,7 @@ Eigen::Matrix4d Registration::get_lm_icp_registration(std::vector<size_t> source
   //Eigen::Matrix4d transformation.
   //The first three elements of std::vector<double> transformation_arr represent the euler angles, the last ones
   //the translation.
-  //use source_indices and target_indices to extract point to compute the matrix to be decomposed.
+  //use sourceIndices and targetIndices to extract point to compute the matrix to be decomposed.
   ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
   Eigen::Matrix4d transformation = Eigen::Matrix4d::Identity(4,4);
@@ -282,14 +300,14 @@ Eigen::Matrix4d Registration::get_lm_icp_registration(std::vector<size_t> source
   std::vector<double> transformation_arr(6, 0.0); 
 
   // Ensure the indices are valid and the same size
-  assert(source_indices.size() == target_indices.size());
-  int num_points = source_indices.size();
+  assert(sourceIndices.size() == targetIndices.size());
+  int num_points = sourceIndices.size();
 
   // Add residual blocks for each point pair
   for (int i = 0; i < num_points; ++i) {
     // Extract corresponding source and target points
-    const Eigen::Vector3d& source_point = source_.points_[source_indices[i]];
-    const Eigen::Vector3d& target_point = target_.points_[target_indices[i]];
+    const Eigen::Vector3d& source_point = source_.points_[sourceIndices[i]];
+    const Eigen::Vector3d& target_point = target_.points_[targetIndices[i]];
 
     // Create a cost function for the current point pair
     ceres::CostFunction* cost_function = PointDistance::Create(source_point, target_point);
@@ -307,10 +325,10 @@ Eigen::Matrix4d Registration::get_lm_icp_registration(std::vector<size_t> source
   double* translation = transformation_arr.data() + 3;
 
   // Convert the optimized rotation (angle-axis) and translation to a transformation matrix
-  Eigen::Matrix3d rotation_matrix;
-  ceres::AngleAxisToRotationMatrix(rotation, rotation_matrix.data());
+  Eigen::Matrix3d rotationMat;
+  ceres::AngleAxisToRotationMatrix(rotation, rotationMat.data());
 
-  transformation.block<3, 3>(0, 0) = rotation_matrix;
+  transformation.block<3, 3>(0, 0) = rotationMat;
   transformation.block<3, 1>(0, 3) = Eigen::Map<Eigen::Vector3d>(translation);
 
   return transformation;
